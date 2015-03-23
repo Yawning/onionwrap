@@ -10,6 +10,11 @@ WARNING(s):
  * There is usually more to secure hidden service administration than simply
    setting up a port mapping, and onionwrap explicitly does nothing against
    application layer deanonymization of the Hidden Service.
+ * Currently only one-shot hidden services are supported.  The private key for
+   the onion WILL DISAPEAR when onionwrap exits.
+
+TODO:
+ * Add support for loading/saving the Onion Service key.
 
 Dependencies:
  * bulb (https://github.com/yawning/bulb)
