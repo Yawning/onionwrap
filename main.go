@@ -193,6 +193,11 @@ func main() {
 			break
 		}
 	}
+	if serviceID == "" {
+		// This should *NEVER* happen since the command succeded, and
+		// the spec guarantees that this will be sent.
+		errorf("Failed to determine service ID.")
+	}
 	infof("Created onion: %s.onion:%s -> %s\n", serviceID, virtPort, target)
 
 	// Launch the actual process, and block till it exits.  Cleanup
