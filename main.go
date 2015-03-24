@@ -182,6 +182,7 @@ func main() {
 		errorf("Failed to connect to the control port: %v\n", err)
 	}
 	defer ctrlConn.Close()
+	ctrlConn.Debug(debugSpew)
 	if err = ctrlConn.Authenticate(os.Getenv(controlPortPasswdEnv)); err != nil {
 		errorf("Failed to authenticate with the control port: %v\n", err)
 	}
@@ -219,33 +220,27 @@ func main() {
 		doneChan <- cmd.Wait()
 	}()
 
-	onChildExit := func() {
-		// Child terminated.
-		debugf("child process terminated\n")
-		if !cmd.ProcessState.Success() {
-			// ProcessState doesn't give the exact return value. :(
-			os.Exit(-1)
-		}
-		os.Exit(0)
-	}
-
 	// Wait for the child to finish, or the wrapper to receive
 	// SIGINT/SIGTERM.
 	select {
 	case <-doneChan:
-		onChildExit()
 	case sig := <-sigChan:
 		// Propagate the signal to the child, and wait for it to die.
 		debugf("received signal: %v\n", sig)
 		cmd.Process.Signal(sig)
 		select {
 		case <-doneChan:
-			onChildExit()
 		case <-time.After(sigKillDelay):
 			debugf("post signal delay elapsed, killing child\n")
 			cmd.Process.Kill()
 			os.Exit(-1)
 		}
 	}
-	panic("BUG: fell through the select???") // NOTREACHED
+
+	debugf("child process terminated\n")
+	if !cmd.ProcessState.Success() {
+		// ProcessState doesn't give the exact return value. :(
+		os.Exit(-1)
+	}
+	os.Exit(0)
 }
