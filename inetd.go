@@ -37,20 +37,13 @@ func runInetd(targetNet, targetAddr string, cmd *exec.Cmd) {
 
 	for {
 		select {
-		case <- doneChan:
+		case <-doneChan:
 			// XXX: Reap children somehow?
 			return
-		case conn := <- acceptChan:
+		case conn := <-acceptChan:
 			debugf("inetd: new connection: %s\n", conn.RemoteAddr())
 			go onInetdConn(conn, cmd)
 		}
-	}
-}
-
-func inetdAcceptLoop(l net.Listener) {
-
-	for {
-
 	}
 }
 
