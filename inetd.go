@@ -21,16 +21,36 @@ func runInetd(targetNet, targetAddr string, cmd *exec.Cmd) {
 	}
 	defer l.Close()
 
-	for {
-		conn, err := l.Accept()
-		if err != nil {
-			if e, ok := err.(net.Error); ok && !e.Temporary() {
-				errorf("Critical Accept() failure: %v\n", err)
+	acceptChan := make(chan net.Conn)
+	go func() {
+		for {
+			conn, err := l.Accept()
+			if err != nil {
+				if e, ok := err.(net.Error); ok && !e.Temporary() {
+					doneChan <- err
+				}
+				continue
 			}
-			continue
+			acceptChan <- conn
 		}
-		debugf("inetd: new connection: %s\n", conn.RemoteAddr())
-		go onInetdConn(conn, cmd)
+	}()
+
+	for {
+		select {
+		case <- doneChan:
+			// XXX: Reap children somehow?
+			return
+		case conn := <- acceptChan:
+			debugf("inetd: new connection: %s\n", conn.RemoteAddr())
+			go onInetdConn(conn, cmd)
+		}
+	}
+}
+
+func inetdAcceptLoop(l net.Listener) {
+
+	for {
+
 	}
 }
 

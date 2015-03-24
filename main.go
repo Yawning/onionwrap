@@ -44,6 +44,7 @@ const (
 
 var debugSpew bool
 var quietSpew bool
+var doneChan chan error
 
 func infof(fmt string, args ...interface{}) {
 	if !quietSpew {
@@ -306,6 +307,16 @@ func main() {
 	infof("Created onion: %s.onion:%s -> %s\n", serviceID, virtPort, target)
 
 	// TODO: Wait till the HS descriptor has been published?
+	ctrlConn.StartAsyncReader()
+	doneChan = make(chan error)
+	go func() {
+		for {
+			if _, err := ctrlConn.NextEvent(); err != nil {
+				doneChan <- err
+				return
+			}
+		}
+	}()
 
 	if *inetd {
 		targetNet := "tcp"
@@ -323,7 +334,6 @@ func main() {
 	if err != nil {
 		os.Exit(-1)
 	}
-	doneChan := make(chan error)
 	go func() {
 		doneChan <- cmd.Wait()
 	}()
@@ -344,8 +354,11 @@ func main() {
 		}
 	}
 
+	// Ensure that it's really dead.
+	cmd.Process.Kill()
+
 	debugf("child process terminated\n")
-	if !cmd.ProcessState.Success() {
+	if cmd.ProcessState == nil || !cmd.ProcessState.Success() {
 		// ProcessState doesn't give the exact return value. :(
 		os.Exit(-1)
 	}
