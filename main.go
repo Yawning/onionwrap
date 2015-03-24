@@ -37,11 +37,13 @@ const (
 	defaultControlPort = "tcp://" + localhost + ":9051"
 
 	sigKillDelay = 5 * time.Second
+
+	onionKeyTypeRSA = "RSA1024"
+	pemKeyTypeRSA   = "RSA PRIVATE KEY"
 )
 
 var debugSpew bool
 var quietSpew bool
-var noRewriteArgs bool
 
 func infof(fmt string, args ...interface{}) {
 	if !quietSpew {
@@ -122,26 +124,38 @@ func loadPrivateKey(path string) (string, error) {
 		return "", err
 	}
 
-	keyType, privKey, err := parsePrivateKeyPEM(rawFile)
-	if err == nil {
-		return keyType + ":" + base64.StdEncoding.EncodeToString(privKey), nil
-	}
-
-	return "", errors.New("invalid/unknown key file format")
-}
-
-func parsePrivateKeyPEM(raw []byte) (string, []byte, error) {
 	var p *pem.Block
 	for {
-		p, raw = pem.Decode(raw)
+		p, rawFile = pem.Decode(rawFile)
 		if p == nil {
 			break
 		}
-		if p.Type == "RSA PRIVATE KEY" {
-			return "RSA1024", p.Bytes, nil
+		if p.Type == pemKeyTypeRSA {
+			return onionKeyTypeRSA + ":" + base64.StdEncoding.EncodeToString(p.Bytes), nil
 		}
 	}
-	return "", nil, errors.New("no valid PEM data found")
+	return "", errors.New("no valid PEM data found")
+}
+
+func savePrivateKey(path, keyStr string) (err error) {
+	splitKey := strings.SplitN(keyStr, ":", 2)
+	if len(splitKey) != 2 {
+		return errors.New("failed to parse PrivateKey response")
+	}
+
+	var keyBlob []byte
+	switch splitKey[0] {
+	case onionKeyTypeRSA:
+		// Serialize into a standard RSA Private Key PEM file.
+		p := &pem.Block{Type: pemKeyTypeRSA}
+		if p.Bytes, err = base64.StdEncoding.DecodeString(splitKey[1]); err != nil {
+			return err
+		}
+		keyBlob = pem.EncodeToMemory(p)
+	default:
+		return errors.New("unknown key type: '" + splitKey[0] + "'")
+	}
+	return ioutil.WriteFile(path, keyBlob, 0600)
 }
 
 func main() {
@@ -153,10 +167,11 @@ func main() {
 	ctrlPortArg := flag.String(controlPortArg, "", "Tor control port")
 	flag.Lookup(controlPortArg).DefValue = defaultControlPort
 	hsPortArg := flag.String("port", "", "Onion Service port")
-	hsKeyArg := flag.String("onion-key", "", "Onion Service private key")
+	hsKeyArg := flag.String("onion-key", "", "Onion Service private key file")
+	noRewriteArgs := flag.Bool("no-rewrite", false, "Disable rewriting subprocess arguments")
+	generatePK := flag.Bool("generate", false, "Generate and save a new key if needed")
 	flag.BoolVar(&debugSpew, "debug", false, "Print debug messages to stderr")
 	flag.BoolVar(&quietSpew, "quiet", false, "Suppress non-error messages")
-	flag.BoolVar(&noRewriteArgs, "no-rewrite", false, "Disable rewriting subprocess arguments")
 	flag.Parse()
 
 	// The control port is taken from the argument, the env var, and then
@@ -190,7 +205,7 @@ func main() {
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	if !noRewriteArgs {
+	if !*noRewriteArgs {
 		// Unless explicitly disabled, replace certain variables in the
 		// subprocess command line arguments with values propagated from
 		// the onionwrap command line.
@@ -218,7 +233,9 @@ func main() {
 				errorf("Failed to load Onion key: %v\n", err)
 			}
 		} else if os.IsNotExist(err) {
-			errorf("Onion Key does not exit: %v\n", *hsKeyArg)
+			if !*generatePK {
+				errorf("Onion Key does not exist: %v\n", *hsKeyArg)
+			}
 		} else {
 			// Something is wrong with the argument.
 			errorf("Failed to stat Onion key: %v\n", err)
@@ -250,7 +267,11 @@ func main() {
 	// Initialize the Onion Service.
 	var resp *bulb.Response
 	if hsKeyStr == "" {
-		resp, err = ctrlConn.Request("ADD_ONION NEW:BEST Port=%s Flags=DiscardPK", *hsPortArg)
+		flags := " Flags=DiscardPK"
+		if *generatePK {
+			flags = ""
+		}
+		resp, err = ctrlConn.Request("ADD_ONION NEW:BEST Port=%s%s", *hsPortArg, flags)
 	} else {
 		resp, err = ctrlConn.Request("ADD_ONION %s Port=%s", hsKeyStr, *hsPortArg)
 	}
@@ -259,9 +280,21 @@ func main() {
 	}
 	var serviceID string
 	for _, l := range resp.Data {
-		serviceID = strings.TrimPrefix(l, "ServiceID=")
-		if serviceID != l {
-			break
+		const (
+			serviceIDPrefix  = "ServiceID="
+			privateKeyPrefix = "PrivateKey="
+		)
+
+		if strings.HasPrefix(l, serviceIDPrefix) {
+			serviceID = strings.TrimPrefix(l, serviceIDPrefix)
+		} else if strings.HasPrefix(l, privateKeyPrefix) {
+			if !*generatePK || hsKeyStr != "" {
+				errorf("Received a private key when we shouldn't have.\n")
+			}
+			hsKeyStr = strings.TrimPrefix(l, privateKeyPrefix)
+			if err = savePrivateKey(*hsKeyArg, hsKeyStr); err != nil {
+				errorf("Failed to save private key: %v\n", err)
+			}
 		}
 	}
 	if serviceID == "" {

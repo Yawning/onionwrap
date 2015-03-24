@@ -7,12 +7,9 @@ It is sort of like a torsocks, but for servers, with a slightly more involved
 commandline.
 
 WARNING:
- * There is usually more to secure hidden service administration than simply
-   setting up a port mapping, and onionwrap explicitly does nothing against
-   application layer deanonymization of the Hidden Service.
-
-TODO:
- * Add support for saving the generated Onion Key.
+There is usually more to secure hidden service administration than simply
+setting up a port mapping, and onionwrap explicitly does nothing against
+application layer deanonymization of the Hidden Service.
 
 Dependencies:
  * bulb (https://github.com/yawning/bulb)
