@@ -170,6 +170,7 @@ func main() {
 	hsKeyArg := flag.String("onion-key", "", "Onion Service private key file")
 	noRewriteArgs := flag.Bool("no-rewrite", false, "Disable rewriting subprocess arguments")
 	generatePK := flag.Bool("generate", false, "Generate and save a new key if needed")
+	inetd := flag.Bool("inetd", false, "Listen on the target port and fork/exec the comand per connection")
 	flag.BoolVar(&debugSpew, "debug", false, "Print debug messages to stderr")
 	flag.BoolVar(&quietSpew, "quiet", false, "Suppress non-error messages")
 	flag.Parse()
@@ -305,6 +306,15 @@ func main() {
 	infof("Created onion: %s.onion:%s -> %s\n", serviceID, virtPort, target)
 
 	// TODO: Wait till the HS descriptor has been published?
+
+	if *inetd {
+		targetNet := "tcp"
+		if targetPort == "" {
+			targetNet = "unix"
+		}
+		runInetd(targetNet, target, cmd)
+		os.Exit(0)
+	}
 
 	// Initialize the signal handling and launch the process.
 	sigChan := make(chan os.Signal)
