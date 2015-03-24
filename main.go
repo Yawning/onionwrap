@@ -9,9 +9,12 @@
 package main
 
 import (
+	"encoding/base64"
+	"encoding/pem"
 	"errors"
 	"flag"
 	gofmt "fmt"
+	"io/ioutil"
 	"log"
 	"net"
 	"os"
@@ -113,6 +116,34 @@ func parsePortArg(arg string) (virtPort, targetPort, target string, err error) {
 	return
 }
 
+func loadPrivateKey(path string) (string, error) {
+	rawFile, err := ioutil.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+
+	keyType, privKey, err := parsePrivateKeyPEM(rawFile)
+	if err == nil {
+		return keyType + ":" + base64.StdEncoding.EncodeToString(privKey), nil
+	}
+
+	return "", errors.New("invalid/unknown key file format")
+}
+
+func parsePrivateKeyPEM(raw []byte) (string, []byte, error) {
+	var p *pem.Block
+	for {
+		p, raw = pem.Decode(raw)
+		if p == nil {
+			break
+		}
+		if p.Type == "RSA PRIVATE KEY" {
+			return "RSA1024", p.Bytes, nil
+		}
+	}
+	return "", nil, errors.New("no valid PEM data found")
+}
+
 func main() {
 	//
 	// Parse/validate the command line arguments.
@@ -122,6 +153,7 @@ func main() {
 	ctrlPortArg := flag.String(controlPortArg, "", "Tor control port")
 	flag.Lookup(controlPortArg).DefValue = defaultControlPort
 	hsPortArg := flag.String("port", "", "Onion Service port")
+	hsKeyArg := flag.String("onion-key", "", "Onion Service private key")
 	flag.BoolVar(&debugSpew, "debug", false, "Print debug messages to stderr")
 	flag.BoolVar(&quietSpew, "quiet", false, "Suppress non-error messages")
 	flag.BoolVar(&noRewriteArgs, "no-rewrite", false, "Disable rewriting subprocess arguments")
@@ -145,7 +177,6 @@ func main() {
 		errorf("Invalid virtual port: %v\n", err)
 	}
 
-	// The command that will be fork/execed.
 	cmdVec := flag.Args()
 	var cmd *exec.Cmd
 	switch len(cmdVec) {
@@ -179,6 +210,21 @@ func main() {
 		}
 	}
 
+	var hsKeyStr string
+	if *hsKeyArg != "" {
+		if _, err = os.Stat(*hsKeyArg); err == nil {
+			hsKeyStr, err = loadPrivateKey(*hsKeyArg)
+			if err != nil {
+				errorf("Failed to load Onion key: %v\n", err)
+			}
+		} else if os.IsNotExist(err) {
+			errorf("Onion Key does not exit: %v\n", *hsKeyArg)
+		} else {
+			// Something is wrong with the argument.
+			errorf("Failed to stat Onion key: %v\n", err)
+		}
+	}
+
 	debugf("Cmd: %v\n", cmd.Args)
 	debugf("CtrlPort: %v, %v\n", ctrlNet, ctrlAddr)
 	debugf("VirtPort: %v Target: %v\n", virtPort, target)
@@ -187,7 +233,7 @@ func main() {
 	// Do the actual work.
 	//
 
-	// Setup the Onion Service, after connecting to the control port.
+	// Connect/authenticate with the control port.
 	ctrlConn, err := bulb.Dial(ctrlNet, ctrlAddr)
 	if err != nil {
 		errorf("Failed to connect to the control port: %v\n", err)
@@ -201,8 +247,13 @@ func main() {
 		errorf("Failed to authenticate with the control port: %v\n", err)
 	}
 
-	// TODO: Support saving the PK/Loading a PK.
-	resp, err := ctrlConn.Request("ADD_ONION NEW:BEST Port=%s Flags=DiscardPK", *hsPortArg)
+	// Initialize the Onion Service.
+	var resp *bulb.Response
+	if hsKeyStr == "" {
+		resp, err = ctrlConn.Request("ADD_ONION NEW:BEST Port=%s Flags=DiscardPK", *hsPortArg)
+	} else {
+		resp, err = ctrlConn.Request("ADD_ONION %s Port=%s", hsKeyStr, *hsPortArg)
+	}
 	if err != nil {
 		errorf("Failed to create onion service: %v\n", err)
 	}
@@ -234,8 +285,7 @@ func main() {
 		doneChan <- cmd.Wait()
 	}()
 
-	// Wait for the child to finish, or the wrapper to receive
-	// SIGINT/SIGTERM.
+	// Wait for the child to finish, or a signal to arrive.
 	select {
 	case <-doneChan:
 	case sig := <-sigChan:
