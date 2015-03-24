@@ -12,6 +12,7 @@ import (
 	"errors"
 	"flag"
 	gofmt "fmt"
+	"log"
 	"net"
 	"os"
 	"os/exec"
@@ -192,7 +193,10 @@ func main() {
 		errorf("Failed to connect to the control port: %v\n", err)
 	}
 	defer ctrlConn.Close()
-	ctrlConn.Debug(debugSpew)
+	if debugSpew {
+		log.SetOutput(os.Stderr)
+		ctrlConn.Debug(debugSpew)
+	}
 	if err = ctrlConn.Authenticate(os.Getenv(controlPortPasswdEnv)); err != nil {
 		errorf("Failed to authenticate with the control port: %v\n", err)
 	}
