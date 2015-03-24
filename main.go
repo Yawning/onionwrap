@@ -71,11 +71,15 @@ func parsePort(portStr string) (uint16, error) {
 func parsePortArg(arg string) (virtPort, targetPort, target string, err error) {
 	// This is formated as VIRTPORT[,TARGET], which is identical to
 	// what the ADD_ONION command expects out of the 'Port' arguments.
-	// If the 'TARGET' is omitted, 'VIRTPORT' is mirrored.  If 'TARGET'
-	// only a naked port, then '127.0.0.1:TARGET' is used, otherwise
-	// 'TARGET' is treated as an address.
 	//
-	// TODO: Figure out what to do with AF_UNIX.
+	//  * If the 'TARGET' is omitted, 'VIRTPORT' is mirrored.
+	//  * If 'TARGET' only a naked port, then '127.0.0.1:TARGET' is used.
+	//  * If 'TARGET' has the prefix 'unix:' the rest is treated as a path
+	//    for an AF_UNIX socket.
+	//  * Otherwise 'TARGET' is parsed as an IP Address/Port.
+	//
+	// Note: rendservice.c:parse_port_config()'s Doxygen comment lies and
+	// specifies 'socket:' as the prefix, but it really is 'unix:'.
 	if arg == "" {
 		return "", "", "", errors.New("no Onion Service port specified")
 	}
@@ -93,6 +97,9 @@ func parsePortArg(arg string) (virtPort, targetPort, target string, err error) {
 	if _, err = parsePort(target); err == nil {
 		// The 'TARGET' is a naked port.
 		return virtPort, target, localhost + ":" + target, nil
+	}
+	if unixPath := strings.TrimPrefix(target, "unix:"); unixPath != target {
+		return virtPort, "", unixPath, nil
 	}
 	tcpAddr, err := net.ResolveTCPAddr("tcp", target)
 	if err != nil {
@@ -162,7 +169,10 @@ func main() {
 		for i := 1; i < len(cmd.Args); i++ {
 			v := cmd.Args[i]
 			v = strings.Replace(v, "%VPORT", virtPort, -1)
-			v = strings.Replace(v, "%TPORT", targetPort, -1)
+			if targetPort != "" {
+				// AF_UNIX targets won't have a port.
+				v = strings.Replace(v, "%TPORT", targetPort, -1)
+			}
 			v = strings.Replace(v, "%TADDR", target, -1)
 			cmd.Args[i] = v
 		}
@@ -206,7 +216,7 @@ func main() {
 	}
 	infof("Created onion: %s.onion:%s -> %s\n", serviceID, virtPort, target)
 
-	// TODO: Wait till the HS descriptor has been published.
+	// TODO: Wait till the HS descriptor has been published?
 
 	// Initialize the signal handling and launch the process.
 	sigChan := make(chan os.Signal)
