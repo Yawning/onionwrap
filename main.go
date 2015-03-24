@@ -15,8 +15,11 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/yawning/bulb"
 	"github.com/yawning/bulb/utils"
@@ -28,6 +31,8 @@ const (
 
 	localhost          = "127.0.0.1"
 	defaultControlPort = "tcp://" + localhost + ":9051"
+
+	sigKillDelay = 5 * time.Second
 )
 
 var debugSpew bool
@@ -200,11 +205,47 @@ func main() {
 	}
 	infof("Created onion: %s.onion:%s -> %s\n", serviceID, virtPort, target)
 
-	// Launch the actual process, and block till it exits.  Cleanup
-	// is automatic because tor will tear down the Onion Service
-	// when the control connection gets closed.
-	err = cmd.Run()
-	if !cmd.ProcessState.Success() {
+	// TODO: Wait till the HS descriptor has been published.
+
+	// Initialize the signal handling and launch the process.
+	sigChan := make(chan os.Signal)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	err = cmd.Start()
+	if err != nil {
 		os.Exit(-1)
 	}
+	doneChan := make(chan error)
+	go func() {
+		doneChan <- cmd.Wait()
+	}()
+
+	onChildExit := func() {
+		// Child terminated.
+		debugf("child process terminated\n")
+		if !cmd.ProcessState.Success() {
+			// ProcessState doesn't give the exact return value. :(
+			os.Exit(-1)
+		}
+		os.Exit(0)
+	}
+
+	// Wait for the child to finish, or the wrapper to receive
+	// SIGINT/SIGTERM.
+	select {
+	case <-doneChan:
+		onChildExit()
+	case sig := <-sigChan:
+		// Propagate the signal to the child, and wait for it to die.
+		debugf("received signal: %v\n", sig)
+		cmd.Process.Signal(sig)
+		select {
+		case <-doneChan:
+			onChildExit()
+		case <-time.After(sigKillDelay):
+			debugf("post signal delay elapsed, killing child\n")
+			cmd.Process.Kill()
+			os.Exit(-1)
+		}
+	}
+	panic("BUG: fell through the select???") // NOTREACHED
 }
