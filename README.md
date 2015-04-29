@@ -13,4 +13,4 @@ application layer deanonymization of the Hidden Service.
 
 Dependencies:
  * bulb (https://github.com/yawning/bulb)
- * tor (Requires my #6411 feature branch.)
+ * tor (Requires a recent build of tor >= 0.2.7.0)
