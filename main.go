@@ -159,6 +159,60 @@ func savePrivateKey(path, keyStr string) (err error) {
 	return ioutil.WriteFile(path, keyBlob, 0600)
 }
 
+func waitForHSDescUpload(ctrlConn *bulb.Conn, serviceID string) (err error) {
+	_, err = ctrlConn.Request("SETEVENTS HS_DESC")
+	if err != nil {
+		return
+	}
+	defer func() {
+		// Disable events, no longer care because things have succeded,
+		// or the descriptor upload has failed, and we will terminate.
+		if err == nil {
+			_, err = ctrlConn.Request("SETEVENTS")
+		}
+	}()
+
+	uploadMap := make(map[string]bool)
+	for {
+		var ev *bulb.Response
+		if ev, err = ctrlConn.NextEvent(); err != nil {
+			return
+		}
+
+		// Parse the event, it SHOULD be a HS_DESC reply.
+		splitReply := strings.Split(ev.Reply, " ")
+		if splitReply[0] != "HS_DESC" {
+			continue
+		}
+		if len(splitReply) < 5 {
+			return errors.New("invalid HS_DESC response: '" + ev.Reply + "'")
+		}
+
+		switch splitReply[1] {
+		case "UPLOAD":
+			if splitReply[2] != serviceID {
+				continue
+			}
+			uploadMap[splitReply[4]] = true
+		case "UPLOADED":
+			if uploadMap[splitReply[4]] {
+				// Ok, either another client just posted an HS
+				// descriptor to one of the the same HSDirs we
+				// just did, or the descriptor post succeded.
+				// There's no way to disambiguate this as far
+				// as I can tell, and "HSFETCH" doesn't return
+				// reliable responoses yet, so just assume
+				// things were successful.
+				return nil
+			}
+		default:
+			// XXX/Yawning: Do we pick a different HSDir when
+			// "UPLOAD_REJECTED"/"UNEXPECTED" happens?
+			delete(uploadMap, splitReply[4])
+		}
+	}
+}
+
 func main() {
 	//
 	// Parse/validate the command line arguments.
@@ -306,8 +360,15 @@ func main() {
 	}
 	infof("Created onion: %s.onion:%s -> %s\n", serviceID, virtPort, target)
 
-	// TODO: Wait till the HS descriptor has been published?
+	infof("Waiting for HS descriptor to be posted to a HSDir.\n")
 	ctrlConn.StartAsyncReader()
+	if err := waitForHSDescUpload(ctrlConn, serviceID); err != nil {
+		errorf("Failed to confirm HS descriptor upload: %v", err)
+	}
+	infof("HS descriptor was posted, starting the service.\n")
+
+	// Detect the tor instance terminating by the async event reader
+	// unblocking with an error.
 	doneChan = make(chan error)
 	go func() {
 		for {
