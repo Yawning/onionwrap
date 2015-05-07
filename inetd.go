@@ -99,17 +99,5 @@ func copyLoop(wg *sync.WaitGroup, src io.ReadCloser, dst io.WriteCloser) {
 	defer dst.Close()
 	defer wg.Done()
 
-	var buf [1024]byte
-	for {
-		n, rdErr := src.Read(buf[:])
-		if n > 0 {
-			_, wrErr := dst.Write(buf[:n])
-			if wrErr != nil {
-				return
-			}
-		}
-		if rdErr != nil {
-			return
-		}
-	}
+	io.Copy(dst, src)
 }
